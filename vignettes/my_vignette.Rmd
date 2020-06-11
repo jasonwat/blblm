@@ -1,0 +1,193 @@
+---
+title: "my_vignette"
+output: rmarkdown::html_vignette
+discription: >
+  The linear model performs some kind of regression analysis    to predict the confiderence interval with cluster or without   cluster.
+vignette: >
+  %\VignetteIndexEntry{my_vignette}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+```{r setup}
+library(blblm)
+```
+
+# Final Project
+
+## Overview
+The code blblm contains four function in a package which is linear regression with bootstrap, logistic linear regression bootstrap, linear regression with bootstrap and with clustering, and logistic linear regression with bootstrap and with clustering.
+
+## Function
+
+### Function 1 
+THe first function is calculating the linear regression with little bag of Bootstraps. 
+
+```{r}
+blblm <- function(formula, data, m , B=5000 ) {
+  data_list <- split_data(data, m)
+  estimates <- future_map(
+    data_list,
+    ~ lm_each_subsample(formula = formula, data = ., n = nrow(data), B = B))
+  res <- list(estimates = estimates, formula = formula)
+  class(res) <- "blblm"
+  invisible(res)
+}
+
+#' split data into m parts of approximated equal sizes
+split_data <- function(data, m) {
+  idx <- sample.int(m, nrow(data), replace = TRUE)
+  data %>% split(idx)
+}
+
+
+#' compute the estimates
+lm_each_subsample <- function(formula, data, n, B) {
+  replicate(B, lm_each_boot(formula, data, n), simplify = FALSE)
+}
+
+#' compute the regression estimates for a blb dataset
+lm_each_boot <- function(formula, data, n) {
+  freqs <- rmultinom(1, n, rep(1, nrow(data)))
+  lm1(formula, data, freqs)
+}
+
+```
+
+
+In the first function, we set it as the main function to calculate the model by putting the input,such as formula, a dataset, number of subsets and the number of bootstrap sample. First, we divide the dataset to the number of subset and find out the model of the dataset and what variable we want to find. We can decide the number of the subset to limit the size. it will allowusers to specify a list of file of datasets rather than loading the whole dataset in the main process then distribute to the workers. Each file would be then loaded in the workers to minmize memory usage. Also we need to set up the split_data and lm_each subsample function to help us divide the dataset to the number that we nned and to compute the estimates of each dataset. in the function of lm_each_boot, we need it to compute the regression estiamates for a blb dataset. I have changed map to future_map in the main function to allow users to specify a list of file of datasets.
+
+
+```{r}
+lm1 <- function(formula, data, freqs) {
+  # drop the original closure of formula,
+  # otherwise the formula will pick a wront variable from the global scope.
+  environment(formula) <- environment()
+  fit <- lm(formula, data, weights = freqs)
+  list(coef = blbcoef(fit), sigma = blbsigma(fit))
+}
+
+#' compute the coefficients from fit
+blbcoef <- function(fit) {
+  coef(fit)
+}
+
+#' compute sigma from fit
+blbsigma <- function(fit) {
+  p <- fit$rank
+  y <- model.extract(fit$model, "response")
+  e <- fitted(fit) - y
+  w <- fit$weights
+  sqrt(sum(w * (e^2)) / (sum(w) - p))
+}
+```
+
+In the second part, we start calculating the number to help us predict the confidence interval. since we successfully get the model, we will have the number of sigma and coefficient of the model.
+
+### Test
+Then, we use test function to test the accuracy of the answer to make sure the program which is correct. I use two test to test the coefficient and the model to make sure they are right. It turns out that they are both correct.
+
+### Function 2 
+THe second function is calculating the linear regression with little bag of Bootstraps with clustering. SInce there is only one CPU is used in the algorithm in the previous implementation, we make it possible to use more than one CPUs. Since different computers have different needs, we will let the user to choose the number.
+
+```{r}
+blblm_cluster <- function(formula, data, m = 10, B = 5000,cluster) {
+  data_list <- split_data(data, m)
+  suppressWarnings(plan(multiprocess,workers=cluster))
+  estimates <- future_map(
+    data_list,
+    ~ lm_each_subsample(formula = formula, data = ., n = nrow(data), B = B))
+  res <- list(estimates = estimates, formula = formula)
+  class(res) <- "blblm"
+  invisible(res)
+}
+
+#' split data into m parts of approximated equal sizes
+split_data <- function(data, m) {
+  idx <- sample.int(m, nrow(data), replace = TRUE)
+  data %>% split(idx)
+}
+
+
+#' compute the estimates
+lm_each_subsample <- function(formula, data, n, B) {
+  replicate(B, lm_each_boot(formula, data, n), simplify = FALSE)
+}
+
+
+#' compute the regression estimates for a blb dataset
+lm_each_boot <- function(formula, data, n) {
+  freqs <- rmultinom(1, n, rep(1, nrow(data)))
+  lm1(formula, data, freqs)
+}
+```
+
+The second test mainly is to find out the model after the user put the cluster number in the new function. it will let the user to use more than one CPUs to make it load quicker for the bootstrap function. I have added the second row of the main function as plan(multiprocess, workers=cluster). It requires the package of "furrr" to load the formula. then, it can help the whole function to have loaded faster. Then, the rest remains unchanged. 
+
+###Test
+Then, we use test function to test the accuracy of the answer to make sure the program which is correct. I use two test to test the coefficient and the model to make sure they are right. It turns out that they are both correct.
+
+
+### Function 3
+In the third function is to calculate the logistic regression model with a little bootstrap.
+
+```{r}
+blbglm <- function(formula, data, m=10, B=5000) {
+  data_list <- split_data(data, m)
+  estimates <- future_map(
+    data_list,
+    ~ glm_each_subsample(formula = formula, data = ., n = nrow(data), B = B))
+  res <- list(estimates = estimates, formula = formula)
+  class(res) <- "blbglm"
+  invisible(res)
+}
+#' estimate the regression estimates based on given the number of repetitions
+glm1 <- function(formula, data, freqs) {
+  # drop the original closure of formula,
+  # otherwise the formula will pick a wront variable from the global scope.
+  environment(formula) <- environment()
+  data[1]=as.factor(data[1])
+  fit <- glm(formula,data,family="binomial", weights = freqs)
+  list(coef = blbcoef(fit), sigma = blbsigma(fit))
+}
+
+```
+
+Since this function changes from linear to logistic, the model selection will be different. in the function of glm1, we can clearly see the difference in the fit variable. First we need to change the residual to the factor as logistic regression only applies the y variable as the factor or it will have an error. Then, I have added family in the model to make it logistic. The result of logistic regression model is a bit different than the linear regression model. 
+
+###Test
+Then, we use test function to test the accuracy of the answer to make sure the program which is correct. I use two test to test the coefficient and the model to make sure they are right. It turns out that they are both correct.
+
+### Function 4
+In the forth function, I have calculated the logistic regression with bootstrap and cluster.Since there is only one CPU is used in the algorithm in the previous implementation, we make it possible to use more than one CPUs. Since different computers have different needs, we will let the user to choose the number.
+
+```{r}
+blbglm_cluster <- function(formula, data, m=10, B=5000,cluster) {
+  data_list <- split_data(data, m)
+  suppressWarnings(plan(multiprocess,workers=cluster))
+  estimates <- future_map(
+    data_list,
+    ~ glm_each_subsample(formula = formula, data = ., n = nrow(data), B = B))
+  res <- list(estimates = estimates, formula = formula)
+  class(res) <- "blbglm"
+  invisible(res)
+}
+```
+
+This function is similar to the previous one as they are calculating the same regression method but to use a different number of CPUs. Therefore, we only need to change the main function to make it allow more than one CPUs in the function and to make sure people can choose it.
+
+###Test
+Then, we use test function to test the accuracy of the answer to make sure the program which is correct. I use two test to test the coefficient and the model to make sure they are right. It turns out that they are both correct.
+
+
+
+
+
+
