@@ -1,8 +1,10 @@
 #' @import purrr
 #' @import stats
+#' @import parallel
+#' @import furrr
 #' @importFrom magrittr %>%
 #' @details
-#' Linear Regression with Little Bag of Bootstraps
+#' Linear Regression with cluster with Little Bag of Bootstraps
 "_PACKAGE"
 
 
@@ -13,11 +15,14 @@ utils::globalVariables(c("."))
 #' @param data the dataset
 #' @param m the number of parts of subset sample
 #' @param B number of bootstrap sample
+#' @param cluster the number of of CPU
+
 
 #' @export
-#' @example fit1 <- blbglm(vs ~ wt * hp, data = mtcars, m = 5, B = 100)
-blblm <- function(formula, data, m , B=5000 ) {
+#' @example fit1 <- blbglm_cluster(vs ~ wt * hp, data = mtcars, m = 5, B = 100,3)
+blblm_cluster <- function(formula, data, m = 10, B = 5000,cluster) {
   data_list <- split_data(data, m)
+  suppressWarnings(plan(multiprocess,workers=cluster))
   estimates <- future_map(
     data_list,
     ~ lm_each_subsample(formula = formula, data = ., n = nrow(data), B = B))
@@ -130,8 +135,8 @@ predict.blblm <- function(object, new_data, confidence = FALSE, level = 0.95, ..
   X <- model.matrix(reformulate(attr(terms(object$formula), "term.labels")), new_data)
   if (confidence) {
     map_mean(est, ~ map_cbind(., ~ X %*% .$coef) %>%
-      apply(1, mean_lwr_upr, level = level) %>%
-      t())
+               apply(1, mean_lwr_upr, level = level) %>%
+               t())
   } else {
     map_mean(est, ~ map_cbind(., ~ X %*% .$coef) %>% rowMeans())
   }
